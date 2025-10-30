@@ -4,7 +4,7 @@ from typing import Optional
 
 
 class UserResponse(BaseModel):
-    """Schema de resposta básica do usuário"""
+    """Schema de resposta básica do usuário."""
     id: int = Field(..., description="ID único do usuário")
     email: EmailStr = Field(..., description="Email do usuário")
     full_name: Optional[str] = Field(None, description="Nome completo")
@@ -12,10 +12,4 @@ class UserResponse(BaseModel):
     created_at: datetime = Field(..., description="Data de criação")
 
     class Config:
-        from_attributes = True  
-
-
-class UserListResponse(BaseModel):
-    """Schema para lista de usuários"""
-    users: list[UserResponse]
-    total: int = Field(..., description="Total de usuários")
+        from_attributes = True
