@@ -1,6 +1,3 @@
-# 📚 README Completo - Finance Planner API
-
-
 # Finance Planner API
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com/)
