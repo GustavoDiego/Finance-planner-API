@@ -4,12 +4,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.models.transaction import Transaction, TransactionType, TransactionCategory
-from app.crud.transaction import transaction as crud_transaction
 
 
 class FinanceService:
     """
     Serviço com lógica de negócio complexa para finanças.
+    
+    Centraliza toda a lógica que estava espalhada em:
+    - endpoints/reports.py (queries e cálculos)
     """
     
     @staticmethod
@@ -23,6 +25,7 @@ class FinanceService:
         """
         Retorna resumo financeiro de um mês específico.
         
+        
         Args:
             db: Sessão do banco
             user_id: ID do usuário
@@ -32,19 +35,14 @@ class FinanceService:
         Returns:
             Dicionário com totais e breakdowns
         """
-        # Cria range do mês
+
         date_from = datetime(year, month, 1)
         if month == 12:
             date_to = datetime(year + 1, 1, 1) - timedelta(seconds=1)
         else:
             date_to = datetime(year, month + 1, 1) - timedelta(seconds=1)
         
-        return crud_transaction.get_summary(
-            db,
-            user_id=user_id,
-            date_from=date_from,
-            date_to=date_to
-        )
+        return FinanceService._calculate_summary(db, user_id, date_from, date_to)
     
     @staticmethod
     def get_yearly_summary(
@@ -55,6 +53,8 @@ class FinanceService:
     ) -> Dict:
         """
         Retorna resumo financeiro de um ano inteiro.
+        
+
         
         Args:
             db: Sessão do banco
@@ -67,12 +67,59 @@ class FinanceService:
         date_from = datetime(year, 1, 1)
         date_to = datetime(year, 12, 31, 23, 59, 59)
         
-        return crud_transaction.get_summary(
-            db,
-            user_id=user_id,
-            date_from=date_from,
-            date_to=date_to
+        return FinanceService._calculate_summary(db, user_id, date_from, date_to)
+    
+    @staticmethod
+    def _calculate_summary(
+        db: Session,
+        user_id: int,
+        date_from: datetime,
+        date_to: datetime
+    ) -> Dict:
+        """
+        Método privado que calcula o resumo financeiro para qualquer período.
+        
+        
+        Args:
+            db: Sessão do banco
+            user_id: ID do usuário
+            date_from: Data inicial
+            date_to: Data final
+        
+        Returns:
+            Dicionário com totais e breakdowns
+        """
+        query = db.query(Transaction).filter(
+            Transaction.user_id == user_id,
+            Transaction.date >= date_from,
+            Transaction.date <= date_to
         )
+        
+        transactions = query.all()
+
+        total_income = sum(t.amount for t in transactions if t.type == TransactionType.INCOME)
+        total_expense = sum(t.amount for t in transactions if t.type == TransactionType.EXPENSE)
+        balance = total_income - total_expense
+
+        income_by_category: Dict[str, float] = {}
+        expense_by_category: Dict[str, float] = {}
+
+        for transaction in transactions:
+            category_name = transaction.category.value
+            
+            if transaction.type == TransactionType.INCOME:
+                income_by_category[category_name] = income_by_category.get(category_name, 0) + transaction.amount
+            else:
+                expense_by_category[category_name] = expense_by_category.get(category_name, 0) + transaction.amount
+
+        return {
+            "total_income": total_income,
+            "total_expense": total_expense,
+            "balance": balance,
+            "transaction_count": len(transactions),
+            "income_by_category": income_by_category,
+            "expense_by_category": expense_by_category,
+        }
     
     @staticmethod
     def get_monthly_breakdown(
@@ -83,6 +130,8 @@ class FinanceService:
     ) -> Dict[str, Dict]:
         """
         Retorna breakdown mensal de um ano inteiro.
+        
+
         
         Args:
             db: Sessão do banco
@@ -113,6 +162,7 @@ class FinanceService:
     ) -> List[Dict]:
         """
         Retorna as maiores despesas do período.
+        
         
         Args:
             db: Sessão do banco
@@ -148,48 +198,6 @@ class FinanceService:
         ]
     
     @staticmethod
-    def get_average_by_category(
-        db: Session,
-        *,
-        user_id: int,
-        transaction_type: TransactionType,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None
-    ) -> Dict[str, float]:
-        """
-        Calcula média de transações por categoria.
-        
-        Args:
-            db: Sessão do banco
-            user_id: ID do usuário
-            transaction_type: Tipo (income ou expense)
-            date_from: Data inicial (opcional)
-            date_to: Data final (opcional)
-        
-        Returns:
-            Dicionário com média por categoria
-        """
-        query = db.query(
-            Transaction.category,
-            func.avg(Transaction.amount).label("average")
-        ).filter(
-            Transaction.user_id == user_id,
-            Transaction.type == transaction_type
-        )
-        
-        if date_from:
-            query = query.filter(Transaction.date >= date_from)
-        if date_to:
-            query = query.filter(Transaction.date <= date_to)
-        
-        query = query.group_by(Transaction.category)
-        
-        return {
-            row[0].value: row[1]
-            for row in query.all()
-        }
-    
-    @staticmethod
     def get_spending_trend(
         db: Session,
         *,
@@ -198,6 +206,7 @@ class FinanceService:
     ) -> List[Dict]:
         """
         Retorna tendência de gastos dos últimos N dias.
+
         
         Args:
             db: Sessão do banco
@@ -233,23 +242,24 @@ class FinanceService:
         db: Session,
         *,
         user_id: int
-    ) -> List[Dict]:
+    ) -> Dict:
         """
         Retorna transações recorrentes do usuário.
+        
         
         Args:
             db: Sessão do banco
             user_id: ID do usuário
         
         Returns:
-            Lista de transações recorrentes com estimativa mensal
+            Dicionário com transações recorrentes e estimativas
         """
         transactions = db.query(Transaction).filter(
             Transaction.user_id == user_id,
             Transaction.is_recurring == True
         ).all()
         
-        total_monthly = sum(t.amount for t in transactions if t.type == TransactionType.EXPENSE)
+        total_monthly_expense = sum(t.amount for t in transactions if t.type == TransactionType.EXPENSE)
         total_monthly_income = sum(t.amount for t in transactions if t.type == TransactionType.INCOME)
         
         return {
@@ -263,9 +273,9 @@ class FinanceService:
                 }
                 for t in transactions
             ],
-            "monthly_expense_estimate": total_monthly,
+            "monthly_expense_estimate": total_monthly_expense,
             "monthly_income_estimate": total_monthly_income,
-            "monthly_balance_estimate": total_monthly_income - total_monthly
+            "monthly_balance_estimate": total_monthly_income - total_monthly_expense
         }
     
     @staticmethod
@@ -277,6 +287,7 @@ class FinanceService:
     ) -> bool:
         """
         Verifica se o usuário está em déficit (gastos > receitas).
+        
         
         Args:
             db: Sessão do banco
@@ -301,6 +312,49 @@ class FinanceService:
         ).scalar() or 0
         
         return expense > income
+    
+    @staticmethod
+    def get_average_by_category(
+        db: Session,
+        *,
+        user_id: int,
+        transaction_type: TransactionType,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None
+    ) -> Dict[str, float]:
+        """
+        Calcula média de transações por categoria.
+        
+        
+        Args:
+            db: Sessão do banco
+            user_id: ID do usuário
+            transaction_type: Tipo (income ou expense)
+            date_from: Data inicial (opcional)
+            date_to: Data final (opcional)
+        
+        Returns:
+            Dicionário com média por categoria
+        """
+        query = db.query(
+            Transaction.category,
+            func.avg(Transaction.amount).label("average")
+        ).filter(
+            Transaction.user_id == user_id,
+            Transaction.type == transaction_type
+        )
+        
+        if date_from:
+            query = query.filter(Transaction.date >= date_from)
+        if date_to:
+            query = query.filter(Transaction.date <= date_to)
+        
+        query = query.group_by(Transaction.category)
+        
+        return {
+            row[0].value: row[1]
+            for row in query.all()
+        }
 
 
 finance_service = FinanceService()
