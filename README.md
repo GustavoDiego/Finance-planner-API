@@ -7,11 +7,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 [![Status](https://img.shields.io/badge/Status-Ativo-success?style=flat-square)](README.md)
 
-API completa para **planejamento financeiro pessoal** com autenticação JWT, CRUD de transações e análises financeiras avançadas.
-
-## 🎯 Features Principais
-
-
+API completa para **planejamento financeiro pessoal** com autenticação JWT, CRUD de transações e análises financeiras.
 
 ## 🚀 Quick Start
 
