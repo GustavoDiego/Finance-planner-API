@@ -1,4 +1,3 @@
-from datetime import timedelta
 from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status, Body
 from fastapi.security import OAuth2PasswordRequestForm
@@ -7,12 +6,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db, get_current_user
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, decode_token
-from app.crud.user import user as crud_user
 from app.models.user import User
 from app.schemas.response import ResponseEnvelope
 from app.schemas.token import Token, RefreshTokenRequest
-from app.schemas.user.request import UserCreate
+from app.schemas.user.request import UserCreate, ChangePasswordRequest
 from app.schemas.user.response import UserResponse
+from app.services.auth_service import auth_service
+
 
 router = APIRouter()
 
@@ -119,17 +119,20 @@ def register(
     - **400**: Email já cadastrado
     - **422**: Dados de entrada inválidos (email inválido, senha muito curta, etc)
     """
+    
+    try:
 
-    user = crud_user.get_by_email(db, email=user_in.email)
-    if user:
+        user = auth_service.register_user(
+            db,
+            email=user_in.email,
+            password=user_in.password,
+            full_name=user_in.full_name
+        )
+    except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Email already registered"
+            detail=str(e)
         )
-    
-
-    user = crud_user.create(db=db, obj_in=user_in)
-    
 
     access_token = create_access_token(subject=user.email)
     refresh_token = create_refresh_token(subject=user.email)
@@ -246,9 +249,9 @@ def login(
     - password: senhaSegura123!
     """
 
-    user = crud_user.authenticate(
-        db=db,
-        email=form_data.username, 
+    user = auth_service.authenticate_user(
+        db,
+        email=form_data.username,
         password=form_data.password
     )
     
@@ -259,12 +262,6 @@ def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-
-    if not crud_user.is_active(user):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user"
-        )
 
     access_token = create_access_token(subject=user.email)
     refresh_token = create_refresh_token(subject=user.email)
@@ -280,6 +277,102 @@ def login(
                 token_type="bearer"
             )
         }
+    )
+
+
+@router.post(
+    "/change-password",
+    response_model=ResponseEnvelope,
+    status_code=status.HTTP_200_OK,
+    summary="Alterar senha do usuário",
+    response_description="Senha alterada com sucesso",
+    responses={
+        200: {
+            "description": "Senha alterada com sucesso",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "status": "success",
+                        "message": "Password changed successfully"
+                    }
+                }
+            }
+        },
+        400: {
+            "description": "Erro ao alterar senha",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Senha atual está incorreta"}
+                }
+            }
+        },
+        401: {
+            "description": "Não autenticado",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Could not validate credentials"}
+                }
+            }
+        }
+    }
+)
+def change_password(
+    *,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+    change_pwd_in: ChangePasswordRequest = Body(
+        ...,
+        example={
+            "old_password": "senhaAtual123!",
+            "new_password": "novaSenha456!"
+        }
+    )
+) -> Any:
+    """
+    Altera a senha do usuário autenticado.
+    
+    
+    ## Autenticação Obrigatória
+    - Requer token JWT válido
+    
+    ## Parâmetros
+    - **old_password**: Senha atual (obrigatória para validação)
+    - **new_password**: Nova senha (mínimo 8 caracteres)
+    
+    ## Validações
+    - Senha atual deve estar correta
+    - Nova senha não pode ser igual à anterior
+    - Mínimo 8 caracteres na nova senha
+    
+    ## Retorna
+    - Mensagem de sucesso
+    
+    ## Erros
+    - **400**: Senha atual incorreta ou nova igual à anterior
+    - **401**: Token inválido
+    """
+    try:
+        success = auth_service.change_password(
+            db,
+            user_id=current_user.id,
+            old_password=change_pwd_in.old_password,
+            new_password=change_pwd_in.new_password
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Senha atual está incorreta"
+        )
+    
+    return ResponseEnvelope(
+        status="success",
+        message="Password changed successfully"
     )
 
 
@@ -386,9 +479,9 @@ def refresh_token(
     - Armazene o refresh token de forma segura no cliente (HttpOnly cookie recomendado)
     - Implemente logout para invalidar tokens no lado do servidor (blacklist)
     - Monitore uso anômalo de refresh tokens
-    - Configure tempo de expiração apropriado (balance entre segurança e UX)
-    """
 
+    """
+    
     payload = decode_token(refresh_request.refresh_token)
     
     if payload is None:
@@ -397,7 +490,7 @@ def refresh_token(
             detail="Invalid refresh token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-  
+    
     if payload.get("type") != "refresh":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -405,28 +498,28 @@ def refresh_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-
     email = payload.get("sub")
     if email is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload"
         )
-    
 
+    from app.crud.user import user as crud_user
     user = crud_user.get_by_email(db, email=email)
+    
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-
-    if not crud_user.is_active(user):
+    
+    if not auth_service.verify_user_active(user):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Inactive user"
         )
-
+    
     new_access_token = create_access_token(subject=user.email)
     new_refresh_token = create_refresh_token(subject=user.email)
     

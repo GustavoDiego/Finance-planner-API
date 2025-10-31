@@ -21,3 +21,18 @@ class UserLogin(BaseModel):
     """Schema para login."""
     email: EmailStr = Field(..., description="Email do usuário")
     password: str = Field(..., description="Senha do usuário")
+
+
+
+class ChangePasswordRequest(BaseModel):
+    """Schema para requisição de mudança de senha."""
+    old_password: str = Field(..., min_length=8, description="Senha atual")
+    new_password: str = Field(..., min_length=8, description="Nova senha")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "old_password": "senhaAtual123!",
+                "new_password": "novaSenha456!"
+            }
+        }
